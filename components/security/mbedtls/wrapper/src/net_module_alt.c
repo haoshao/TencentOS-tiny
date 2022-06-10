@@ -1,5 +1,5 @@
 #if !defined(MBEDTLS_CONFIG_FILE)
-#include "mbedtls/config.h"
+#include "mbedtls/mbedtls_config.h"
 #else
 #include MBEDTLS_CONFIG_FILE
 #endif
@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #endif
 
-#include "tos.h"
+#include "tos_k.h"
 #include "mbedtls/net_sockets.h"
 #include "sal_module_wrapper.h"
 

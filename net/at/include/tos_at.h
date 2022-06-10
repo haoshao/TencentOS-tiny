@@ -18,24 +18,39 @@
 #ifndef _TOS_AT_H_
 #define _TOS_AT_H_
 
-#include "tos.h"
-#include "tos_at_utils.h"
+#include "tos_k.h"
 #include "tos_hal.h"
 
-#define AT_AGENT_ECHO_OK            "OK"
-#define AT_AGENT_ECHO_FAIL          "FAIL"
-#define AT_AGENT_ECHO_ERROR         "ERROR"
+#define AT_DATA_CHANNEL_NUM                         6
+#define AT_DATA_CHANNEL_FIFO_BUFFER_DEFAULT_SIZE    (2048 + 1024)
 
-#define AT_DATA_CHANNEL_NUM                     6
-#define AT_DATA_CHANNEL_FIFO_BUFFER_SIZE        (2048 + 1024)
+#define AT_UART_RX_FIFO_BUFFER_SIZE                 (2048 + 1024)
+#define AT_RECV_CACHE_SIZE                          2048
 
-#define AT_UART_RX_FIFO_BUFFER_SIZE             (2048 + 1024)
-#define AT_RECV_CACHE_SIZE                      2048
+#define AT_CMD_BUFFER_SIZE                          512
 
-#define AT_CMD_BUFFER_SIZE                      512
+#define AT_PARSER_TASK_STACK_SIZE                   2048
+#define AT_PARSER_TASK_PRIO                         2
 
-#define AT_PARSER_TASK_STACK_SIZE               2048
-#define AT_PARSER_TASK_PRIO                     2
+#define AT_INPUT_TYPE_FRAME_EN                      0
+#define AT_FRAME_LEN_MAIL_MAX                       5
+
+#define AT_INPUT_SIMULATE_IDLE_EN                   0
+#define SIMULATE_IDLE_DEFAULT_TIME                  5
+
+#define AT_DEBUG_LOG_EN                             0
+
+#if AT_DEBUG_LOG_EN
+#define AT_LOG(...) tos_kprintf(__VA_ARGS__)
+#else
+#define AT_LOG(...)
+#endif
+
+#if (AT_INPUT_SIMULATE_IDLE_EN == 1) && (AT_INPUT_TYPE_FRAME_EN == 1)
+#error  "please choose AT_INPUT_SIMULATE_IDLE or AT_INPUT_TYPE_FRAM!"
+#elif (AT_INPUT_SIMULATE_IDLE_EN == 1) && (TOS_CFG_TIMER_EN == 0)
+#error  "please enable TOS_CFG_TIMER_EN!"
+#endif
 
 typedef enum at_status_en {
     AT_STATUS_OK,
@@ -55,6 +70,9 @@ typedef enum at_parse_status_en {
     AT_PARSE_STATUS_EVENT,
     AT_PARSE_STATUS_EXPECT,
     AT_PARSE_STATUS_OVERFLOW,
+    AT_PARSE_STATUS_OK,
+    AT_PARSE_STATUS_FAIL,
+    AT_PARSE_STATUS_ERROR
 } at_parse_status_t;
 
 typedef enum at_echo_status_en {
@@ -74,11 +92,14 @@ typedef enum at_channel_status_en {
 
 typedef struct at_data_channel_st {
     uint8_t             is_free;
-    k_fifo_t            rx_fifo;
+    k_chr_fifo_t        rx_fifo;
     uint8_t            *rx_fifo_buffer;
     k_mutex_t           rx_lock;
+    k_sem_t             rx_sem;
 
     at_channel_status_t status;
+
+    k_stopwatch_t       timer;
 
     const char         *remote_ip;
     const char         *remote_port;
@@ -93,7 +114,13 @@ typedef struct at_echo_st {
     size_t              __w_idx;
     int                 __is_expecting;
     k_sem_t             __expect_notify;
+    k_sem_t             __status_set_notify;
+    int                 __is_fuzzy_match;
 } at_echo_t;
+
+typedef struct at_frame_len_mail_st {
+    uint16_t frame_len;
+} at_frame_len_mail_t;
 
 typedef void (*at_event_callback_t)(void);
 
@@ -105,30 +132,38 @@ typedef struct at_event_st {
 typedef struct at_agent_st {
     at_data_channel_t   data_channel[AT_DATA_CHANNEL_NUM];
 
-    at_event_t *event_table;
-    size_t      event_table_size;
+    at_event_t     *event_table;
+    size_t          event_table_size;
 
-    at_echo_t  *echo;
+    at_echo_t      *echo;
 
-    k_task_t    parser;
-    at_cache_t  recv_cache;
+    k_task_t        parser;
+    at_cache_t      recv_cache;
 
-    at_timer_t  timer;
+    k_mutex_t       global_lock;
 
-    k_mutex_t   global_lock;
+    char           *cmd_buf;
+    k_mutex_t       cmd_buf_lock;
 
-    char       *cmd_buf;
-    k_mutex_t   cmd_buf_lock;
+    hal_uart_t      uart;
+    k_mutex_t       uart_tx_lock;
+//    k_mutex_t       uart_rx_lock;
+    
+#if AT_INPUT_TYPE_FRAME_EN
+    k_mail_q_t      uart_rx_frame_mail;
+    uint8_t        *uart_rx_frame_mail_buffer;
+    uint16_t        fifo_available_len;
+#else
+    k_sem_t         uart_rx_sem;
+    
+#if AT_INPUT_SIMULATE_IDLE_EN
+    k_timer_t       idle_check_timer;
+#endif  /* AT_INPUT_SIMULATE_IDLE_EN */
+#endif  /* AT_INPUT_TYPE_FRAME_EN */
 
-    hal_uart_t  uart;
-    k_mutex_t   uart_tx_lock;
-    k_mutex_t   uart_rx_lock;
-    k_sem_t     uart_rx_sem;
-    k_fifo_t    uart_rx_fifo;
-    uint8_t    *uart_rx_fifo_buffer;
+    k_chr_fifo_t    uart_rx_fifo;
+    uint8_t        *uart_rx_fifo_buffer;
 } at_agent_t;
-
-#define AT_AGENT        ((at_agent_t *)(&at_agent))
 
 /**
  * @brief Write data to a channel.
@@ -136,6 +171,7 @@ typedef struct at_agent_st {
  *
  * @attention None
  *
+ * @param[in]   at_agent    pointer to the at agent struct.
  * @param[in]   channel_id  id of the channel.
  * @param[in]   buffer      data buffer to write.
  * @param[in]   buffer_len  length of the buffer.
@@ -144,7 +180,7 @@ typedef struct at_agent_st {
  * @retval  -1              write failed(error).
  * @retval  none -1         the number of bytes written.
  */
-int tos_at_channel_write(int channel_id, uint8_t *buffer, size_t buffer_len);
+__API__ int tos_at_channel_write(at_agent_t *at_agent, int channel_id, uint8_t *buffer, size_t buffer_len);
 
 /**
  * @brief Read data from a channel.
@@ -152,6 +188,7 @@ int tos_at_channel_write(int channel_id, uint8_t *buffer, size_t buffer_len);
  *
  * @attention None
  *
+ * @param[in]   at_agent    pointer to the at agent struct.
  * @param[in]   channel_id  id of the channel.
  * @param[out]  buffer      buffer to hold the data read.
  * @param[in]   buffer_len  length of the buffer.
@@ -161,7 +198,7 @@ int tos_at_channel_write(int channel_id, uint8_t *buffer, size_t buffer_len);
  * @retval  -1              read failed(error).
  * @retval  none -1         the number of bytes read.
  */
-int tos_at_channel_read_timed(int channel_id, uint8_t *buffer, size_t buffer_len, uint32_t timeout);
+__API__ int tos_at_channel_read_timed(at_agent_t *at_agent, int channel_id, uint8_t *buffer, size_t buffer_len, uint32_t timeout);
 
 /**
  * @brief Read data from a channel.
@@ -169,6 +206,7 @@ int tos_at_channel_read_timed(int channel_id, uint8_t *buffer, size_t buffer_len
  *
  * @attention None
  *
+ * @param[in]   at_agent    pointer to the at agent struct.
  * @param[in]   channel_id  id of the channel.
  * @param[out]  buffer      buffer to hold the data read.
  * @param[in]   buffer_len  length of the buffer.
@@ -177,7 +215,7 @@ int tos_at_channel_read_timed(int channel_id, uint8_t *buffer, size_t buffer_len
  * @retval  -1              read failed(error).
  * @retval  none -1         the number of bytes read.
  */
-int tos_at_channel_read(int channel_id, uint8_t *buffer, size_t buffer_len);
+__API__ int tos_at_channel_read(at_agent_t *at_agent, int channel_id, uint8_t *buffer, size_t buffer_len);
 
 /**
  * @brief Allocate a channel.
@@ -185,6 +223,7 @@ int tos_at_channel_read(int channel_id, uint8_t *buffer, size_t buffer_len);
  *
  * @attention None
  *
+ * @param[in]   at_agent    pointer to the at agent struct.
  * @param[in]   channel_id  id of the channel.
  * @param[in]   ip          remote ip of the channel.
  * @param[in]   port        remote port of the channel.
@@ -193,7 +232,7 @@ int tos_at_channel_read(int channel_id, uint8_t *buffer, size_t buffer_len);
  * @retval  -1              allocate failed(error).
  * @retval  none -1         the id of the channel.
  */
-int tos_at_channel_alloc_id(int channel_id, const char *ip, const char *port);
+__API__ int tos_at_channel_alloc_id(at_agent_t *at_agent, int channel_id, const char *ip, const char *port);
 
 /**
  * @brief Allocate a channel.
@@ -201,6 +240,7 @@ int tos_at_channel_alloc_id(int channel_id, const char *ip, const char *port);
  *
  * @attention None
  *
+ * @param[in]   at_agent    pointer to the at agent struct.
  * @param[in]   ip          remote ip of the channel.
  * @param[in]   port        remote port of the channel.
  *
@@ -208,7 +248,25 @@ int tos_at_channel_alloc_id(int channel_id, const char *ip, const char *port);
  * @retval  -1              allocate failed(error).
  * @retval  none -1         the id of the channel.
  */
-int tos_at_channel_alloc(const char *ip, const char *port);
+__API__ int tos_at_channel_alloc(at_agent_t *at_agent, const char *ip, const char *port);
+
+/**
+ * @brief Allocate a channel.
+ * Allocate a channel with certain socket buffer size.
+ *
+ * @attention None
+ *
+ * @param[in]   at_agent            pointer to the at agent struct.
+ * @param[in]   channel_id          id of the channel.
+ * @param[in]   ip                  remote ip of the channel.
+ * @param[in]   port                remote port of the channel.
+ * @param[in]   socket_buffer_size  buffer size of the channel.
+ *
+ * @return  errcode
+ * @retval  -1              allocate failed(error).
+ * @retval  none -1         the id of the channel.
+ */
+__API__ int tos_at_channel_alloc_with_size(at_agent_t *at_agent, const char *ip, const char *port, size_t socket_buffer_size);
 
 /**
  * @brief Free a channel.
@@ -216,43 +274,47 @@ int tos_at_channel_alloc(const char *ip, const char *port);
  *
  * @attention None
  *
+ * @param[in]   at_agent    pointer to the at agent struct.
  * @param[in]   channel_id  id of the channel.
  *
  * @return  errcode
  * @retval  -1              free failed(error).
  * @retval  0               free successfully.
  */
-int tos_at_channel_free(int channel_id);
+__API__ int tos_at_channel_free(at_agent_t *at_agent, int channel_id);
 
 /**
  * @brief Set channel broken.
  *
  * @attention None
  *
+ * @param[in]   at_agent    pointer to the at agent struct.
  * @param[in]   channel_id  id of the channel.
  *
  * @return  errcode
  * @retval  -1              set failed(error).
  * @retval  0               set successfully.
  */
-__API__ int tos_at_channel_set_broken(int channel_id);
+__API__ int tos_at_channel_set_broken(at_agent_t *at_agent, int channel_id);
 
 /**
  * @brief Judge whether channel is working.
  *
  * @attention None
  *
+ * @param[in]   at_agent    pointer to the at agent struct.
  * @param[in]   channel_id  id of the channel.
  *
  * @return  at channel status(type of at_channel_status_t)
  */
-__API__ int tos_at_channel_is_working(int channel_id);
+__API__ int tos_at_channel_is_working(at_agent_t *at_agent, int channel_id);
 
 /**
  * @brief Initialize the at framework.
  *
  * @attention None
  *
+ * @param[in]   at_agent            pointer to the at agent struct.
  * @param[in]   uart_port           port number of the uart thougth which the module connect to the MCU.
  * @param[in]   event_table         the listened event table.
  * @param[in]   event_table_size    the size of the listened event table.
@@ -261,16 +323,19 @@ __API__ int tos_at_channel_is_working(int channel_id);
  * @retval  -1              initialize failed(error).
  * @retval  0               initialize successfully.
  */
-int tos_at_init(hal_uart_port_t uart_port, at_event_t *event_table, size_t event_table_size);
+__API__ int tos_at_init(at_agent_t *at_agent, char *task_name, k_stack_t *stk, hal_uart_port_t uart_port, at_event_t *event_table, size_t event_table_size);
 
 /**
  * @brief De-initialize the at framework.
  *
+ * @param[in]   at_agent    pointer to the at agent struct.
+ * 
  * @attention None
  *
- * @return  None
+ * @return
+None
  */
-void tos_at_deinit(void);
+__API__ void tos_at_deinit(at_agent_t *at_agent);
 
 /**
  * @brief Create a echo struct.
@@ -286,13 +351,30 @@ void tos_at_deinit(void);
  * @retval  -1              create failed(error).
  * @retval  0               create successfully.
  */
-int tos_at_echo_create(at_echo_t *echo, char *buffer, size_t buffer_size, char *echo_expect);
+__API__ int tos_at_echo_create(at_echo_t *echo, char *buffer, size_t buffer_size, char *echo_expect);
+
+/**
+ * @brief Create a echo struct with fuzzy matching for expected echo.
+ *
+ * @attention None
+ *
+ * @param[in]   echo                    pointer to the echo struct.
+ * @param[out]  buffer                  buffer to hold the received message from the module.
+ * @param[in]   buffer_size             size of the buffer.
+ * @param[in]   echo_expect_contains    if the echo message contains echo_expect_contains, it is a matching.
+ *
+ * @return  errcode
+ * @retval  -1              create failed(error).
+ * @retval  0               create successfully.
+ */
+__API__ int tos_at_echo_fuzzy_matching_create(at_echo_t *echo, char *buffer, size_t buffer_size, char *echo_expect_contains);
 
 /**
  * @brief Execute an at command.
  *
  * @attention None
  *
+ * @param[in]   at_agent        pointer to the at agent struct.
  * @param[in]   echo            pointer to the echo struct.
  * @param[in]   timeout         command wait timeout .
  * @param[in]   cmd             at command.
@@ -301,7 +383,7 @@ int tos_at_echo_create(at_echo_t *echo, char *buffer, size_t buffer_size, char *
  * @retval  -1              execute failed(error).
  * @retval  0               execute successfully.
  */
-int tos_at_cmd_exec(at_echo_t *echo, uint32_t timeout, const char *cmd, ...);
+__API__ int tos_at_cmd_exec(at_agent_t *at_agent, at_echo_t *echo, uint32_t timeout, const char *cmd, ...);
 
 /**
  * @brief Execute an at command.
@@ -309,6 +391,7 @@ int tos_at_cmd_exec(at_echo_t *echo, uint32_t timeout, const char *cmd, ...);
  *
  * @attention None
  *
+ * @param[in]   at_agent        pointer to the at agent struct.
  * @param[in]   echo            pointer to the echo struct.
  * @param[in]   timeout         command wait timeout .
  * @param[in]   cmd             at command.
@@ -317,13 +400,14 @@ int tos_at_cmd_exec(at_echo_t *echo, uint32_t timeout, const char *cmd, ...);
  * @retval  -1              execute failed(error).
  * @retval  0               execute successfully.
  */
-int tos_at_cmd_exec_until(at_echo_t *echo, uint32_t timeout, const char *cmd, ...);
+__API__ int tos_at_cmd_exec_until(at_agent_t *at_agent, at_echo_t *echo, uint32_t timeout, const char *cmd, ...);
 
 /**
  * @brief Send raw data througth uart.
  *
  * @attention None
  *
+ * @param[in]   at_agent        pointer to the at agent struct.
  * @param[in]   echo            pointer to the echo struct.
  * @param[in]   timeout         command wait timeout .
  * @param[in]   buf             data to send.
@@ -333,7 +417,7 @@ int tos_at_cmd_exec_until(at_echo_t *echo, uint32_t timeout, const char *cmd, ..
  * @retval  -1              execute failed(error).
  * @retval  0               execute successfully.
  */
-int tos_at_raw_data_send(at_echo_t *echo, uint32_t timeout, const uint8_t *buf, size_t size);
+__API__ int tos_at_raw_data_send(at_agent_t *at_agent, at_echo_t *echo, uint32_t timeout, const uint8_t *buf, size_t size);
 
 /**
  * @brief Send raw data througth uart.
@@ -341,6 +425,7 @@ int tos_at_raw_data_send(at_echo_t *echo, uint32_t timeout, const uint8_t *buf, 
  *
  * @attention None
  *
+ * @param[in]   at_agent        pointer to the at agent struct.
  * @param[in]   echo            pointer to the echo struct.
  * @param[in]   timeout         command wait timeout .
  * @param[in]   buf             data to send.
@@ -350,33 +435,63 @@ int tos_at_raw_data_send(at_echo_t *echo, uint32_t timeout, const uint8_t *buf, 
  * @retval  -1              execute failed(error).
  * @retval  0               execute successfully.
  */
-int tos_at_raw_data_send_until(at_echo_t *echo, uint32_t timeout, const uint8_t *buf, size_t size);
+__API__ int tos_at_raw_data_send_until(at_agent_t *at_agent, at_echo_t *echo, uint32_t timeout, const uint8_t *buf, size_t size);
 
+#if AT_INPUT_TYPE_FRAME_EN
+/**
+ * @brief Write amount bytes to the at uart.
+ * The function called by the uart interrupt, to put the data from the uart to the at framework.
+ *
+ * @attention None
+ *
+ * @param[in]   at_agent        pointer to the at agent struct.
+ * @param[in]   pdata           pointer of the uart received data.
+ * @param[in]   len             length of the uart received data.
+ *
+ * @return  None
+ */
+__API__ void tos_at_uart_input_frame(at_agent_t *at_agent, uint8_t *pdata, uint16_t len);
+
+#elif AT_INPUT_SIMULATE_IDLE_EN
+/**
+ * @brief Write byte to the at uart.
+ * The function called by the uart receive interrupt.
+ *
+ * @attention No notification is given after writing.
+ *
+ * @param[in]   at_agent        pointer to the at agent struct.
+ * @param[in]   data            uart received data.
+ *
+ * @return  None
+ */
+__API__ void tos_at_uart_input_byte_no_notify(at_agent_t *at_agent, uint8_t data);
+#else
 /**
  * @brief Write byte to the at uart.
  * The function called by the uart interrupt, to put the data from the uart to the at framework.
  *
  * @attention None
  *
+ * @param[in]   at_agent        pointer to the at agent struct.
  * @param[in]   data            uart received data.
  *
  * @return  None
  */
-void tos_at_uart_write_byte(uint8_t data);
-
+__API__ void tos_at_uart_input_byte(at_agent_t *at_agent, uint8_t data);
+#endif
 /**
  * @brief A global lock provided by at framework.
  * The lock usually used to make a atomic function.
  *
  * @attention None
  *
- * @param   None.
+ * @param[in]   at_agent        pointer to the at agent struct.
  *
  * @return  errcode
  * @retval  -1              pend failed(error).
  * @retval  0               pend successfully.
  */
-int tos_at_global_lock_pend(void);
+__API__ int tos_at_global_lock_pend(at_agent_t *at_agent);
 
 /**
  * @brief A global lock provided by at framework.
@@ -384,13 +499,13 @@ int tos_at_global_lock_pend(void);
  *
  * @attention None
  *
- * @param   None.
+ * @param[in]   at_agent        pointer to the at agent struct.
  *
  * @return  errcode
  * @retval  -1              post failed(error).
  * @retval  0               post successfully.
  */
-int tos_at_global_lock_post(void);
+__API__ int tos_at_global_lock_post(at_agent_t *at_agent);
 
 /**
  * @brief Read data from the uart.
@@ -398,12 +513,13 @@ int tos_at_global_lock_post(void);
  *
  * @attention None
  *
+ * @param[in]   at_agent        pointer to the at agent struct.
  * @param[out]  buffer          buffer to hold the data read from the uart.
  * @param[in]   buffer_len      length of the buffer.
  *
  * @return  length of the data read from the uart.
  */
-int tos_at_uart_read(uint8_t *buffer, size_t buffer_len);
+__API__ int tos_at_uart_read(at_agent_t *at_agent, uint8_t *buffer, size_t buffer_len);
 
 /**
  * @brief Read data from the uart.
@@ -411,12 +527,13 @@ int tos_at_uart_read(uint8_t *buffer, size_t buffer_len);
  *
  * @attention None
  *
+ * @param[in]   at_agent        pointer to the at agent struct.
  * @param[out]  buffer          buffer to hold the data read from the uart.
  * @param[in]   buffer_len      length of the buffer.
  *
  * @return  length of the data read from the uart.
  */
-int tos_at_uart_readline(uint8_t *buffer, size_t buffer_len);
+__API__ int tos_at_uart_readline(at_agent_t *at_agent, uint8_t *buffer, size_t buffer_len);
 
 /**
  * @brief Read data from the uart.
@@ -424,12 +541,13 @@ int tos_at_uart_readline(uint8_t *buffer, size_t buffer_len);
  *
  * @attention None
  *
+ * @param[in]   at_agent        pointer to the at agent struct.
  * @param[out]  buffer          buffer to hold the data read from the uart.
  * @param[in]   buffer_len      length of the buffer.
  *
  * @return  length of the data read from the uart.
  */
-int tos_at_uart_drain(uint8_t *buffer, size_t buffer_len);
+__API__ int tos_at_uart_drain(at_agent_t *at_agent, uint8_t *buffer, size_t buffer_len);
 
 /**
  * @brief Get the remote ip of a channel.
@@ -437,11 +555,12 @@ int tos_at_uart_drain(uint8_t *buffer, size_t buffer_len);
  *
  * @attention None
  *
+ * @param[in]   at_agent        pointer to the at agent struct.
  * @param[in]   channel_id      id of the channel.
  *
  * @return  remote ip of the channel.
  */
-const char *tos_at_agent_channel_ip_get(int channel_id);
+__API__ const char *tos_at_channel_ip_get(at_agent_t *at_agent, int channel_id);
 
 /**
  * @brief Get the remote port of a channel.
@@ -449,11 +568,12 @@ const char *tos_at_agent_channel_ip_get(int channel_id);
  *
  * @attention None
  *
+ * @param[in]   at_agent        pointer to the at agent struct.
  * @param[in]   channel_id      id of the channel.
  *
  * @return  remote port of the channel.
  */
-const char *tos_at_agent_channel_port_get(int channel_id);
+__API__ const char *tos_at_channel_port_get(at_agent_t *at_agent, int channel_id);
 
-#endif /* __AT_AGENT_H_ */
+#endif /* _TOS_AT_H_ */
 

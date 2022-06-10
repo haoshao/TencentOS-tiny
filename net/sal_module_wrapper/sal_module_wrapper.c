@@ -12,6 +12,13 @@ int tos_sal_module_register(sal_module_t *module)
     return -1;
 }
 
+int tos_sal_module_register_default()
+{
+    g_sal_module = NULL;
+
+    return 0;
+}
+
 int tos_sal_module_init(void)
 {
     if (g_sal_module && g_sal_module->init) {
@@ -32,6 +39,14 @@ int tos_sal_module_connect(const char *ip, const char *port, sal_proto_t proto)
 {
     if (g_sal_module && g_sal_module->connect) {
         return g_sal_module->connect(ip, port, proto);
+    }
+    return -1;
+}
+
+int tos_sal_module_connect_with_size(const char *ip, const char *port, sal_proto_t proto, size_t socket_buffer_size)
+{
+    if (g_sal_module && g_sal_module->connect_with_size) {
+        return g_sal_module->connect_with_size(ip, port, proto, socket_buffer_size);
     }
     return -1;
 }

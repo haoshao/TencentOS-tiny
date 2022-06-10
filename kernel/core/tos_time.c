@@ -1,4 +1,21 @@
-#include <tos.h>
+/*----------------------------------------------------------------------------
+ * Tencent is pleased to support the open source community by making TencentOS
+ * available.
+ *
+ * Copyright (C) 2019 THL A29 Limited, a Tencent company. All rights reserved.
+ * If you have downloaded a copy of the TencentOS binary from Tencent, please
+ * note that the TencentOS binary is licensed under the BSD 3-Clause License.
+ *
+ * If you have downloaded a copy of the TencentOS source code from Tencent,
+ * please note that TencentOS source code is licensed under the BSD 3-Clause
+ * License, except for the third-party components listed below which are
+ * subject to different license terms. Your integration of TencentOS into your
+ * own projects may require compliance with the BSD 3-Clause License, as well
+ * as the other licenses applicable to the third-party components included
+ * within TencentOS.
+ *---------------------------------------------------------------------------*/
+
+#include "tos_k.h"
 
 __API__ k_tick_t tos_systick_get(void)
 {
@@ -22,12 +39,12 @@ __API__ void tos_systick_set(k_tick_t tick)
 
 __API__ k_time_t tos_tick2millisec(k_tick_t tick)
 {
-    return (k_time_t)(tick * K_TIME_MILLISEC_PER_SEC / TOS_CFG_CPU_TICK_PER_SECOND);
+    return (k_time_t)(tick * (K_TIME_MILLISEC_PER_SEC / TOS_CFG_CPU_TICK_PER_SECOND));
 }
 
 __API__ k_tick_t tos_millisec2tick(k_time_t ms)
 {
-    return ((k_tick_t)ms * TOS_CFG_CPU_TICK_PER_SECOND / K_TIME_MILLISEC_PER_SEC);
+    return (k_tick_t)(ms * (TOS_CFG_CPU_TICK_PER_SECOND / K_TIME_MILLISEC_PER_SEC));
 }
 
 __API__ k_err_t tos_sleep_ms(k_time_t ms)

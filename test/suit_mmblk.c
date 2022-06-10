@@ -9,6 +9,9 @@ SUITE(suit_mmblk);
 k_mmblk_pool_t test_mmblk_pool_00;
 k_mmblk_pool_t test_mmblk_pool_01;
 k_mmblk_pool_t test_mmblk_pool_02;
+k_mmblk_pool_t *test_mmblk_pool_dyn_00;
+k_mmblk_pool_t *test_mmblk_pool_dyn_01;
+k_mmblk_pool_t *test_mmblk_pool_dyn_02;
 
 uint8_t mmblk_pool_buffer_00[MMBLK_BLK_NUM * MMBLK_BLK_SIZE];
 uint8_t mmblk_pool_buffer_01[MMBLK_BLK_NUM * MMBLK_BLK_SIZE];
@@ -69,6 +72,38 @@ TEST test_tos_mmblk_pool_destroy(void)
     PASS();
 }
 
+#if TOS_CFG_OBJ_DYNAMIC_CREATE_EN > 0u
+
+TEST test_tos_mmblk_pool_create_dyn(void)
+{
+    k_err_t err;
+
+    err = tos_mmblk_pool_create_dyn(&test_mmblk_pool_dyn_00, MMBLK_BLK_NUM, MMBLK_BLK_SIZE);
+    ASSERT_EQ(err, K_ERR_NONE);
+
+    err = tos_mmblk_pool_create_dyn(&test_mmblk_pool_dyn_01, MMBLK_BLK_NUM, MMBLK_BLK_SIZE);
+    ASSERT_EQ(err, K_ERR_NONE);
+
+    err = tos_mmblk_pool_create_dyn(&test_mmblk_pool_dyn_02, MMBLK_BLK_NUM, MMBLK_BLK_SIZE);
+    ASSERT_EQ(err, K_ERR_NONE);
+
+    err = tos_mmblk_pool_destroy_dyn(test_mmblk_pool_dyn_00);
+    ASSERT_EQ(err, K_ERR_NONE);
+
+    err = tos_mmblk_pool_destroy_dyn(test_mmblk_pool_dyn_01);
+    ASSERT_EQ(err, K_ERR_NONE);
+
+    err = tos_mmblk_pool_destroy_dyn(test_mmblk_pool_dyn_02);
+    ASSERT_EQ(err, K_ERR_NONE);
+
+    err = tos_mmblk_pool_create_dyn(&test_mmblk_pool_dyn_00, MMBLK_BLK_NUM, MMBLK_BLK_SIZE + 1);
+    ASSERT_EQ(err, K_ERR_MMBLK_INVALID_BLK_SIZE);
+
+    PASS();
+}
+
+#endif
+
 TEST test_tos_mmblk_alloc(void)
 {
     int i = 0;
@@ -123,6 +158,9 @@ SUITE(suit_mmblk)
 {
     RUN_TEST(test_tos_mmblk_pool_create);
     RUN_TEST(test_tos_mmblk_pool_destroy);
+#if TOS_CFG_OBJ_DYNAMIC_CREATE_EN > 0u
+    RUN_TEST(test_tos_mmblk_pool_create_dyn);
+#endif
     RUN_TEST(test_tos_mmblk_alloc);
     RUN_TEST(test_tos_mmblk_free);
 }

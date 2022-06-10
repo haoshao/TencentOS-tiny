@@ -10,6 +10,7 @@ SUITE(suit_mutex);
 k_mutex_t test_mutex_00;
 k_mutex_t test_mutex_01;
 k_mutex_t test_mutex_02;
+k_mutex_t *test_mutex_dyn_00;
 
 static void test_mutex_pend_task_entry(void *arg)
 {
@@ -126,6 +127,23 @@ TEST test_tos_mutex_create(void)
 
     PASS();
 }
+
+#if TOS_CFG_OBJ_DYNAMIC_CREATE_EN > 0u
+
+TEST test_tos_mutex_create_dyn(void)
+{
+    k_err_t err;
+
+    err = tos_mutex_create_dyn(&test_mutex_dyn_00);
+    ASSERT_EQ(err, K_ERR_NONE);
+
+    err = tos_mutex_destroy_dyn(test_mutex_dyn_00);
+    ASSERT_EQ(err, K_ERR_NONE);
+
+    PASS();
+}
+
+#endif
 
 TEST test_tos_mutex_destroy(void)
 {
@@ -406,6 +424,9 @@ SUITE(suit_mutex)
 {
     RUN_TEST(test_tos_mutex_create);
     RUN_TEST(test_tos_mutex_destroy);
+#if TOS_CFG_OBJ_DYNAMIC_CREATE_EN > 0u
+    RUN_TEST(test_tos_mutex_create_dyn);
+#endif
     RUN_TEST(test_tos_mutex_pend);
     RUN_TEST(test_tos_mutex_pend_timed);
     RUN_TEST(test_tos_mutex_post);

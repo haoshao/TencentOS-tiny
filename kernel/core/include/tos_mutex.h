@@ -1,14 +1,35 @@
+/*----------------------------------------------------------------------------
+ * Tencent is pleased to support the open source community by making TencentOS
+ * available.
+ *
+ * Copyright (C) 2019 THL A29 Limited, a Tencent company. All rights reserved.
+ * If you have downloaded a copy of the TencentOS binary from Tencent, please
+ * note that the TencentOS binary is licensed under the BSD 3-Clause License.
+ *
+ * If you have downloaded a copy of the TencentOS source code from Tencent,
+ * please note that TencentOS source code is licensed under the BSD 3-Clause
+ * License, except for the third-party components listed below which are
+ * subject to different license terms. Your integration of TencentOS into your
+ * own projects may require compliance with the BSD 3-Clause License, as well
+ * as the other licenses applicable to the third-party components included
+ * within TencentOS.
+ *---------------------------------------------------------------------------*/
+
 #ifndef _TOS_MUTEX_H_
 #define  _TOS_MUTEX_H_
+
+__CDECLS_BEGIN
 
 #if TOS_CFG_MUTEX_EN > 0u
 
 typedef struct k_mutex_st {
+    knl_obj_t       knl_obj;
+
     pend_obj_t      pend_obj;
     k_nesting_t     pend_nesting;
     k_task_t       *owner;
     k_prio_t        owner_orig_prio;
-    k_list_t        owner_list;
+    k_list_t        owner_anchor;
 } k_mutex_t;
 
 /**
@@ -36,6 +57,36 @@ __API__ k_err_t tos_mutex_create(k_mutex_t *mutex);
  * @retval  #K_ERR_NONE                   return successfully.
  */
 __API__ k_err_t tos_mutex_destroy(k_mutex_t *mutex);
+
+#if TOS_CFG_OBJ_DYNAMIC_CREATE_EN > 0u
+
+/**
+ * @brief Create a dynamic mutex.
+ * create a dynamic mutex.
+ *
+ * @attention None
+ *
+ * @param[in]   mutex       pointer to the pointer of the mutex.
+ *
+ * @return  errcode
+ * @retval  #K_ERR_NONE                   return successfully.
+ */
+__API__ k_err_t tos_mutex_create_dyn(k_mutex_t **mutex);
+
+/**
+ * @brief Destroy a dynamic mutex.
+ * destroy a dynamic mutex.
+ *
+ * @attention None
+ *
+ * @param[in]   mutex       pointer to the handler of the mutex.
+ *
+ * @return  errcode
+ * @retval  #K_ERR_NONE                   return successfully.
+ */
+__API__ k_err_t tos_mutex_destroy_dyn(k_mutex_t *mutex);
+
+#endif
 
 /**
  * @brief Pend a mutex.
@@ -89,9 +140,11 @@ __API__ k_err_t tos_mutex_pend(k_mutex_t *mutex);
  */
 __API__ k_err_t tos_mutex_post(k_mutex_t *mutex);
 
-__KERNEL__ void mutex_release(k_mutex_t *mutex);
+__KNL__ void mutex_release(k_mutex_t *mutex);
 
 #endif
+
+__CDECLS_END
 
 #endif /* _TOS_MUTEX_H_ */
 
